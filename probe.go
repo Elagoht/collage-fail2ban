@@ -51,11 +51,16 @@ func isProbe(r *http.Request, prefixes []string) bool {
 	return false
 }
 
-// isSubresource reports whether r is a browser fetching a part of a page — an
-// image, a script, a style sheet — by its Sec-Fetch-Dest: anything but a
+// isSubresource reports whether r is a browser request another page could
+// have made its reader send: one from another site (Sec-Fetch-Site:
+// cross-site: a no-cors fetch, a hidden iframe, a link), or a part of a page —
+// an image, a script, a style sheet — by its Sec-Fetch-Dest: anything but a
 // document, a frame or a fetch ("empty"). A page anywhere can make its readers'
 // browsers ask for any path, so these requests never strike.
 func isSubresource(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return true
+	}
 	switch r.Header.Get("Sec-Fetch-Dest") {
 	case "", "document", "iframe", "empty":
 		return false

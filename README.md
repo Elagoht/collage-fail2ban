@@ -230,8 +230,10 @@ has started do nothing either.
   yours, can embed `<img src="https://your.site/.env">`, so every reader's browser
   requests it. Browsers mark such requests with `Sec-Fetch-Dest` (`image`,
   `script`, `style`, …), and a request whose `Sec-Fetch-Dest` is anything but
-  `document`, `iframe` or `empty` never strikes any jail. The flip side: a scanner
-  that forges that header is not detected.
+  `document`, `iframe` or `empty` never strikes any jail, and neither does any
+  request a browser marks `Sec-Fetch-Site: cross-site` (a no-cors `fetch`, a hidden
+  `<iframe>` or a link from another site). The flip side: a scanner that forges
+  these headers is not detected.
 - **Readers following broken links.** A missing file under a mount (`/static/…`)
   never strikes `notfound`. But many broken links to pages, or to paths a handler
   answers `404`, can still reach `notfound`'s limit for a reader clicking through

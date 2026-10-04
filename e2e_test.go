@@ -680,3 +680,27 @@ func TestE2E_BanLength(t *testing.T) {
 		t.Errorf("Bans() = %+v, want the ban lengthened to 3h", b)
 	}
 }
+
+// A request from another site — a no-cors fetch, a hidden iframe, a link —
+// never strikes; a same-origin document request is still judged.
+func TestE2E_CrossSiteRequestsNotCounted(t *testing.T) {
+	send := func(hs *harness, site, dest string) {
+		for range 3 {
+			r := httptest.NewRequest(http.MethodGet, "/.env", nil)
+			r.RemoteAddr = "1.1.1.1:1"
+			r.Header.Set("Sec-Fetch-Site", site)
+			r.Header.Set("Sec-Fetch-Dest", dest)
+			hs.h.ServeHTTP(httptest.NewRecorder(), r)
+		}
+	}
+	cross := newApp(t, Options{}, false, nil)
+	send(cross, "cross-site", "empty")
+	if got := cross.status("1.1.1.1:1"); got != http.StatusOK {
+		t.Errorf("cross-site: status = %d, want 200", got)
+	}
+	same := newApp(t, Options{}, false, nil)
+	send(same, "same-origin", "document")
+	if got := same.status("1.1.1.1:1"); got != http.StatusForbidden {
+		t.Errorf("same-origin document: status = %d, want 403", got)
+	}
+}

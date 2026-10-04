@@ -171,7 +171,7 @@ func (p *Plugin) clientOf(addr netip.Addr) (netip.Prefix, bool) {
 // OnRequest judges the request once it is answered: a probe path the site
 // does not serve as a page, a document or an action, or an early rejection,
 // strikes the probe jail; else a 404 not from a mount strikes notfound. A
-// browser's subresource request strikes nothing. The request is classified
+// browser's subresource or cross-site request strikes nothing. The request is classified
 // here, before anything downstream can change it; finish only hears the status
 // and reads the route the request resolved to.
 func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) {
