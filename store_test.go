@@ -297,3 +297,97 @@ func TestStore_Sweep(t *testing.T) {
 		t.Fatalf("record kept past end+24h: %d", len(s.banRecs))
 	}
 }
+
+func BenchmarkStore_BanAtCap(b *testing.B) {
+	const n = 10000
+	s := newStore(n, n, 24*time.Hour)
+	addr := func(i int) netip.Prefix {
+		p, _ := clientPrefix(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+		return p
+	}
+	for i := range n {
+		s.ban(addr(i), "probe", time.Hour+time.Duration(i)*time.Second, t0, false)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.ban(addr(n+i%(1<<23)), "probe", 2*time.Hour+time.Duration(i)*time.Second, t0, false)
+	}
+}
+
+func TestStore_SweepBackwardTime(t *testing.T) {
+	s := newStore(100, 100, 24*time.Hour)
+	c := pfx(t, "1.2.3.4")
+	other := pfx(t, "9.9.9.9")
+	b := s.ban(c, "manual", time.Minute, t0, false)
+	last := b.Until.Add(memory + 10*time.Minute)
+	s.swept = last
+
+	// Slightly earlier times, from callers that read the clock before locking,
+	// do not sweep and leave swept alone.
+	for _, at := range []time.Duration{-time.Second, -30 * time.Second, -time.Minute} {
+		s.banned(other, last.Add(at))
+		if len(s.banRecs) != 1 || !s.swept.Equal(last) {
+			t.Fatalf("at %v: swept (records %d, swept %v)", at, len(s.banRecs), s.swept)
+		}
+	}
+	// A real backward jump, more than a minute, sweeps.
+	back := last.Add(-2 * time.Minute)
+	s.banned(other, back)
+	if len(s.banRecs) != 0 || !s.swept.Equal(back) {
+		t.Fatalf("backward jump did not sweep (records %d, swept %v)", len(s.banRecs), s.swept)
+	}
+}
+
+func TestStore_FindTimeChanges(t *testing.T) {
+	s := newStore(100, 100, 24*time.Hour)
+	c := pfx(t, "1.2.3.4")
+	wide := testJail()
+	narrow := wide
+	narrow.FindTime = Duration(time.Minute)
+	s.strike(c, "probe", wide, t0)
+	s.strike(c, "probe", narrow, t0.Add(2*time.Minute))
+	if n := len(s.counters[c].strikes["probe"].times); n != 1 {
+		t.Fatalf("%d strikes kept, want 1: the older one is outside the new 1m window", n)
+	}
+	if _, ok := s.strike(c, "probe", narrow, t0.Add(2*time.Minute+time.Second)); ok {
+		t.Fatal("banned with the older strike counted")
+	}
+}
+
+// checkHeap asserts the ban heap holds exactly the records, indexed and ordered.
+func checkHeap(t *testing.T, s *store) {
+	t.Helper()
+	if len(s.byEnd) != len(s.banRecs) {
+		t.Fatalf("heap %d records, map %d", len(s.byEnd), len(s.banRecs))
+	}
+	for i, r := range s.byEnd {
+		if r.index != i || s.banRecs[r.prefix] != r {
+			t.Fatalf("heap entry %d out of step with the map", i)
+		}
+		if i > 0 && r.until.Before(s.byEnd[(i-1)/2].until) {
+			t.Fatalf("heap order broken at %d", i)
+		}
+	}
+}
+
+func TestStore_HeapInStep(t *testing.T) {
+	s := newStore(100, 20, 24*time.Hour)
+	addr := func(i int) netip.Prefix {
+		p, _ := clientPrefix(netip.AddrFrom4([4]byte{10, 0, byte(i >> 8), byte(i)}))
+		return p
+	}
+	// Bans with scattered ends, re-bans in place, unbans and sweeps.
+	for i := range 500 {
+		at := t0.Add(time.Duration(i) * time.Minute)
+		d := time.Duration((i*7919)%300+1) * time.Minute
+		s.ban(addr(i%40), "manual", d, at, i%3 == 0)
+		if i%11 == 0 {
+			s.unban(addr((i * 13) % 40))
+		}
+		s.banned(addr(0), at.Add(time.Duration(i%5)*24*time.Hour))
+		checkHeap(t, s)
+		if len(s.banRecs) > 20 {
+			t.Fatalf("%d records over the cap", len(s.banRecs))
+		}
+	}
+}

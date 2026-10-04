@@ -27,6 +27,7 @@ type store struct {
 	counters map[netip.Prefix]*client
 	lru      *list.List // of netip.Prefix, most recently struck at the front
 	banRecs  map[netip.Prefix]*banRec
+	byEnd    banHeap   // the same records, soonest until first
 	swept    time.Time // last sweep
 }
 
@@ -43,12 +44,89 @@ type jailStrikes struct {
 	window time.Duration
 }
 
-// banRec is a client's latest ban. It is live until until and kept until
-// until+memory so the next ban can double; until is the ban's end (lastEnd).
+// banRec is a client's latest ban. until is the ban's end: the ban is live
+// before it, and the record is kept until until+memory so the next ban can
+// double. Ending a ban early is unban, which deletes the record, so no
+// separate end is needed.
 type banRec struct {
-	until time.Time
-	jail  string
-	count int // bans within memory of each other's end, this one included
+	prefix netip.Prefix
+	until  time.Time
+	jail   string
+	count  int // bans within memory of each other's end, this one included
+	index  int // position in store.byEnd
+}
+
+// banHeap is a min-heap of ban records by until, each record knowing its
+// index, so a push, a removal and a fix are O(log n). It is written out rather
+// than built on container/heap, whose interface traffics in any.
+type banHeap []*banRec
+
+func (h banHeap) less(i, j int) bool { return h[i].until.Before(h[j].until) }
+
+func (h banHeap) swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+
+func (h banHeap) up(i int) {
+	for i > 0 {
+		p := (i - 1) / 2
+		if !h.less(i, p) {
+			return
+		}
+		h.swap(i, p)
+		i = p
+	}
+}
+
+// down sinks i and reports whether it moved.
+func (h banHeap) down(i int) bool {
+	start := i
+	for {
+		l := 2*i + 1
+		if l >= len(h) {
+			break
+		}
+		m := l
+		if r := l + 1; r < len(h) && h.less(r, l) {
+			m = r
+		}
+		if !h.less(m, i) {
+			break
+		}
+		h.swap(i, m)
+		i = m
+	}
+	return i > start
+}
+
+func (h *banHeap) push(r *banRec) {
+	r.index = len(*h)
+	*h = append(*h, r)
+	h.up(r.index)
+}
+
+// fix restores the order after r.until changed.
+func (h banHeap) fix(r *banRec) {
+	if !h.down(r.index) {
+		h.up(r.index)
+	}
+}
+
+// remove takes r out.
+func (h *banHeap) remove(r *banRec) {
+	old := *h
+	i, last := r.index, len(old)-1
+	if i != last {
+		old.swap(i, last)
+	}
+	old[last] = nil
+	*h = old[:last]
+	if i != last {
+		h.fix((*h)[i])
+	}
+	r.index = -1
 }
 
 func newStore(maxTracked, maxBans int, maxBanTime time.Duration) *store {
@@ -171,7 +249,9 @@ func (s *store) ban(c netip.Prefix, jail string, d time.Duration, now time.Time,
 func (s *store) unban(c netip.Prefix) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.banRecs, c)
+	if r, ok := s.banRecs[c]; ok {
+		s.dropBan(r)
+	}
 	s.dropClient(c)
 }
 
@@ -207,34 +287,34 @@ func (s *store) put(c netip.Prefix, jail string, d time.Duration, now time.Time,
 			d = s.maxBanTime
 		}
 	}
-	if !ok {
+	until := now.Add(d)
+	if ok {
+		r.until, r.jail, r.count = until, jail, count
+		s.byEnd.fix(r)
+	} else {
 		s.evictBan()
-		r = &banRec{}
+		r = &banRec{prefix: c, until: until, jail: jail, count: count}
 		s.banRecs[c] = r
+		s.byEnd.push(r)
 	}
-	*r = banRec{until: now.Add(d), jail: jail, count: count}
-	return Ban{Prefix: c, Jail: jail, Until: r.until, Count: count}
+	return Ban{Prefix: c, Jail: jail, Until: until, Count: count}
 }
 
 // evictBan makes room for one more record at maxBans by dropping the one that
-// ends soonest. Ended records (kept for doubling) end before live ones, so they
-// go first, then the live ban ending soonest. A linear scan: at the default
-// 10,000 records it runs only when the cap is full. s.mu is held.
+// ends soonest, the heap's minimum. Ended records (kept for doubling) end
+// before live ones, so they go first, then the live ban ending soonest.
+// s.mu is held.
 func (s *store) evictBan() {
-	if s.maxBans <= 0 || len(s.banRecs) < s.maxBans {
+	if s.maxBans <= 0 || len(s.byEnd) == 0 || len(s.banRecs) < s.maxBans {
 		return
 	}
-	var victim netip.Prefix
-	var soonest time.Time
-	first := true
-	for c, r := range s.banRecs {
-		if first || r.until.Before(soonest) {
-			victim, soonest, first = c, r.until, false
-		}
-	}
-	if !first {
-		delete(s.banRecs, victim)
-	}
+	s.dropBan(s.byEnd[0])
+}
+
+// dropBan deletes r. s.mu is held.
+func (s *store) dropBan(r *banRec) {
+	s.byEnd.remove(r)
+	delete(s.banRecs, r.prefix)
 }
 
 // dropClient forgets c's counters. s.mu is held.
@@ -248,17 +328,20 @@ func (s *store) dropClient(c netip.Prefix) {
 }
 
 // sweep drops records past their memory and strikes past their window, at
-// most once a minute of now. A now before the last sweep sweeps again. s.mu is
-// held.
+// most once a minute of now. Callers read the clock before taking the lock, so
+// a now slightly before the last sweep is normal and skips; only a jump back
+// of more than a minute sweeps again. s.mu is held.
 func (s *store) sweep(now time.Time) {
-	if d := now.Sub(s.swept); !s.swept.IsZero() && d >= 0 && d < sweepEvery {
-		return
+	if !s.swept.IsZero() {
+		d := now.Sub(s.swept)
+		if d < sweepEvery && d >= -sweepEvery {
+			return
+		}
 	}
 	s.swept = now
-	for c, r := range s.banRecs {
-		if now.After(r.until.Add(memory)) {
-			delete(s.banRecs, c)
-		}
+	// Records leave in until order, so the heap's minimum is the next to go.
+	for len(s.byEnd) > 0 && now.After(s.byEnd[0].until.Add(memory)) {
+		s.dropBan(s.byEnd[0])
 	}
 	for c, cl := range s.counters {
 		for jail, js := range cl.strikes {
