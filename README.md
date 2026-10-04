@@ -97,12 +97,13 @@ The n-th ban of a client within 24 hours of the previous ban's end lasts the jai
 `banTime` x 2^(n-1), capped at `maxBanTime` (default `24h`). A ban after a longer
 quiet spell starts over.
 
-A manual ban (`Ban`) is not doubled, and replaces any ban the client already has.
+A manual ban (`Ban`) is not doubled itself, but it counts toward the repeat count: an
+automatic ban after a manual one is doubled. It replaces any ban the client already has.
 `Unban` lifts the ban and also forgets the client's earlier bans.
 
 ## What a banned client sees
 
-A plain `403 Forbidden` with the body `Forbidden`, `Content-Type: text/plain` and
+A plain `403 Forbidden` with the body `Forbidden`, `Content-Type: text/plain; charset=utf-8` and
 `Cache-Control: no-store`. It is never the site's error page, by design: rendering
 a page for a banned client would make a flood of banned requests expensive.
 
@@ -120,7 +121,7 @@ func login(f2b *fail2ban.Plugin) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := authenticate(r)
 		if !ok {
-			f2b.Report(r, "login") // 5 failures in 10m: banned for 15m
+			f2b.Report(r, "login") // at the jail's limit: banned
 			http.Error(w, "wrong email or password", http.StatusUnauthorized)
 			return
 		}
@@ -150,9 +151,9 @@ and your own load balancer.
 | `Report(r, jail)` / `Forgive(r, jail)` | See above |
 
 A `Ban` carries `Prefix` (`/32` for IPv4, `/64` for IPv6), `Jail`, `Until` and
-`Count` (bans of this client in the last 24 hours, this one included).
+`Count` (this ban and the earlier ones, each within 24 hours of the previous ban's end).
 
-`Options.OnBan` is called after each new ban, on the request's goroutine: keep it
+`Options.OnBan` is called after each new ban, on the goroutine that made the ban (the request's, or yours for a manual `Ban`): keep it
 fast, and hand slow work to a goroutine of your own. A panic in it is recovered and
 logged, and the ban stands. Each ban is logged at `Warn`:
 message `fail2ban: banned` with attributes `client`, `jail` and `until`. `OnBan` is Go only.

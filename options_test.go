@@ -107,6 +107,7 @@ func TestConfigure_Invalid(t *testing.T) {
 		"maxBanTime":       {Options{MaxBanTime: -1}, "maxBanTime"},
 		"maxTracked":       {Options{MaxTracked: -1}, "maxTracked"},
 		"maxBans":          {Options{MaxBans: -1}, "maxBans"},
+		"probePaths":       {Options{ProbePaths: []string{"admin"}}, "admin"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

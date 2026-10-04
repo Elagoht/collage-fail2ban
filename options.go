@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -114,6 +115,11 @@ func (o *Options) validate() error {
 			return fmt.Errorf("fail2ban: jail %q: findTime must not be negative", n)
 		case j.BanTime < 0:
 			return fmt.Errorf("fail2ban: jail %q: banTime must not be negative", n)
+		}
+	}
+	for _, e := range o.ProbePaths {
+		if e != "" && !strings.HasPrefix(e, "/") {
+			return fmt.Errorf("fail2ban: probePaths entry %q must start with \"/\"", e)
 		}
 	}
 	switch {
