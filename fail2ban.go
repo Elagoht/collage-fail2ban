@@ -248,7 +248,10 @@ func (p *Plugin) Report(r *http.Request, jail string) {
 	}
 }
 
-// Forgive clears r's client's strikes in jail: after a successful login, say.
+// Forgive clears r's client's strikes in jail. It is only safe when the
+// success proves the failures were the same person's — a login to the very
+// account being guessed: forgiving on any success lets an attacker with an
+// account of their own guess without limit.
 func (p *Plugin) Forgive(r *http.Request, jail string) {
 	if !p.started.Load() {
 		return
