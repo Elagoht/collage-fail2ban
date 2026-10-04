@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -104,7 +104,7 @@ func (o *Options) validate() error {
 	for n := range o.Jails {
 		names = append(names, n)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, n := range names {
 		j := o.Jails[n]
 		switch {
