@@ -2,6 +2,7 @@ package fail2ban
 
 import (
 	"bytes"
+	"context"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -702,5 +703,63 @@ func TestE2E_CrossSiteRequestsNotCounted(t *testing.T) {
 	send(same, "same-origin", "document")
 	if got := same.status("1.1.1.1:1"); got != http.StatusForbidden {
 		t.Errorf("same-origin document: status = %d, want 403", got)
+	}
+}
+
+// missingPage registers a page at path whose Required fragment answers
+// ErrNotFound, so the page routes but answers 404.
+func missingPage(t *testing.T, app *collage.App, name, path string) {
+	t.Helper()
+	frag := collage.NewFragment(name, "p.html").
+		WithDataHandler(collage.Load(func(context.Context, *collage.RenderContext) (string, error) {
+			return "", collage.ErrNotFound
+		})).Required().Build()
+	if err := app.RegisterPage(collage.NewPage(name).WithPath("en", path).WithContent(frag).Build()); err != nil {
+		t.Fatalf("RegisterPage %s: %v", path, err)
+	}
+}
+
+// A placeholder page that answers 404 for a probe path does not serve it: the
+// probe still counts. Core records the page as the route before it renders.
+func TestE2E_ProbeAPageAnswers404StillCounts(t *testing.T) {
+	stories := newAppWith(t, Options{}, false, nil, func(app *collage.App) {
+		missingPage(t, app, "story", "/stories/{id}")
+	})
+	for range 3 {
+		if got := stories.get("/stories/.env", "1.1.1.1:1").Code; got != http.StatusNotFound {
+			t.Fatalf("/stories/.env: status = %d, want 404 from the page", got)
+		}
+	}
+	if got := stories.status("1.1.1.1:1"); got != http.StatusForbidden {
+		t.Errorf("/stories/{id} answering 404: status = %d, want 403", got)
+	}
+
+	root := newAppWith(t, Options{}, false, nil, func(app *collage.App) {
+		missingPage(t, app, "slug", "/{slug}")
+	})
+	for range 3 {
+		if got := root.get("/.env", "1.1.1.1:1").Code; got != http.StatusNotFound {
+			t.Fatalf("/.env: status = %d, want 404 from the page", got)
+		}
+	}
+	if got := root.status("1.1.1.1:1"); got != http.StatusForbidden {
+		t.Errorf("/{slug} answering 404: status = %d, want 403", got)
+	}
+}
+
+// With TrustedProxies right, X-Forwarded-For naming only the proxy itself is
+// not the forgotten-proxy case: no Warn, and the request counts.
+func TestE2E_ForgottenProxyGuardNeedsAnotherAddress(t *testing.T) {
+	for _, proxies := range [][]string{{"127.0.0.1"}, nil} {
+		hs := newApp(t, Options{}, false, proxies)
+		for range 3 {
+			hs.get("/.env", "127.0.0.1:1", "127.0.0.1")
+		}
+		if strings.Contains(hs.logs.String(), "TrustedProxies is probably missing") {
+			t.Errorf("TrustedProxies %v: warned for X-Forwarded-For naming the proxy itself", proxies)
+		}
+		if got := hs.status("127.0.0.1:1"); got != http.StatusForbidden {
+			t.Errorf("TrustedProxies %v: status = %d, want 403: the request counts", proxies, got)
+		}
 	}
 }

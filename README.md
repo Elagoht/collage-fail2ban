@@ -56,11 +56,12 @@ proxies **and the CDN's published address ranges**: a hop left out is taken for
 the client, and every visitor coming through it becomes one client.
 
 If you forget, the plugin notices the commonest case: a request from a loopback or
-private address that carries `X-Forwarded-For`, yet whose `ClientIP` is still that
-address, comes from a proxy collage was not told about. Such requests are not
-counted, in any jail, `Report` included, and the plugin logs one `Warn` per process
-saying `Server.TrustedProxies` is probably missing. Nothing is banned until you fix
-the configuration. A request whose client collage cannot tell (`ClientIP` is the
+private address whose `X-Forwarded-For` ends with another address, yet whose
+`ClientIP` is still the sender's, comes from a proxy collage was not told about.
+Such requests are not counted, in any jail, `Report` included, and the plugin logs
+one `Warn` per process saying `Server.TrustedProxies` is probably missing. That
+keeps your proxy from being banned, but it also means nothing coming through it is
+counted until you fix the configuration. A request whose client collage cannot tell (`ClientIP` is the
 zero address, as when the proxy sends `X-Forwarded-For: unknown`) is never counted
 either.
 
@@ -113,7 +114,10 @@ path.
 
 A probe path the site really serves is not counted: when the request resolves to
 one of your pages, documents or actions (a page at `/wp-admin/` on a site that
-moved off WordPress, say), it is a reader's request. A request to a handler
+moved off WordPress, say) and is answered with a success or a redirect, it is a
+reader's request. A page that answers `404` for it, such as `/stories/{id}` asked
+for `/stories/.env` or a root `/{slug}` asked for `/.env`, does not serve it, and
+the probe counts. A request to a handler
 (`app.Handle`) or a mount under a probe path still counts: those answer a whole
 prefix, real or not.
 
@@ -251,6 +255,13 @@ has started do nothing either.
 
 ## Limits
 
+- **Clients on a private or loopback address can opt out.** The forgotten-proxy
+  guard above cannot tell a proxy from any other sender on a private network: a
+  client on your LAN, VPN or intranet, or on the same host, that sends its own
+  `X-Forwarded-For` naming another address is never counted as itself, in any
+  jail, `Report` included: if `TrustedProxies` does not cover it the guard skips
+  it, and if it does, the address it names is counted instead. Do not rely on this
+  plugin against clients inside your own network.
 - Per process and in memory. Instances do not share bans, and a restart clears
   them.
 - Bounded by `maxTracked` and `maxBans`. At the `maxBans` cap the ban ending

@@ -431,6 +431,9 @@ func lruLen(t *testing.T, s *store) int {
 	if s.lru.back != prev {
 		t.Fatal("lru: back is not the last client")
 	}
+	if n != len(s.counters) {
+		t.Fatalf("lru holds %d clients, s.counters %d", n, len(s.counters))
+	}
 	return n
 }
 

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,13 +121,14 @@ func (p *Plugin) client(r *http.Request) (netip.Prefix, bool) {
 }
 
 // counted is the client r comes from, and whether its requests are counted.
-// Beyond client's rules, a request from a loopback or private RemoteAddr that
-// carries X-Forwarded-For but whose ClientIP is still RemoteAddr is not: that
-// is a proxy Server.TrustedProxies forgot, and banning it would ban every
-// visitor behind it. The first such request logs a Warn.
+// Beyond client's rules, a request from a loopback or private RemoteAddr whose
+// X-Forwarded-For names another address last, but whose ClientIP is still
+// RemoteAddr, is not: that is a proxy Server.TrustedProxies forgot, and
+// banning it would ban every visitor behind it. The first such request logs a
+// Warn.
 func (p *Plugin) counted(r *http.Request) (netip.Prefix, bool) {
 	addr := collage.ClientIP(r)
-	if len(r.Header.Values("X-Forwarded-For")) > 0 && (addr.IsLoopback() || addr.IsPrivate()) && addr == remoteAddr(r) {
+	if (addr.IsLoopback() || addr.IsPrivate()) && addr == remoteAddr(r) && forwardsAnother(r, addr) {
 		p.proxyWarning.Do(func() {
 			p.log.LogAttrs(r.Context(), slog.LevelWarn,
 				"fail2ban: a request from a local proxy carries X-Forwarded-For, but Server.TrustedProxies is probably missing it; requests through it are not counted, or the proxy, and every visitor with it, would be banned",
@@ -135,6 +137,39 @@ func (p *Plugin) counted(r *http.Request) (netip.Prefix, bool) {
 		return netip.Prefix{}, false
 	}
 	return p.clientOf(addr)
+}
+
+// forwardsAnother reports whether r's X-Forwarded-For ends with an address
+// other than remote: a proxy naming a client. One naming only itself, or
+// ending in something that is not an address, is not.
+func forwardsAnother(r *http.Request, remote netip.Addr) bool {
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		return false
+	}
+	last := values[len(values)-1]
+	if i := strings.LastIndexByte(last, ','); i >= 0 {
+		last = last[i+1:]
+	}
+	a, ok := parseForwarded(strings.TrimSpace(last))
+	return ok && a != remote
+}
+
+// parseForwarded reads an X-Forwarded-For entry as collage does: an address,
+// with or without a port, an IPv6 one in brackets or not; unmapped, no zone.
+func parseForwarded(e string) (netip.Addr, bool) {
+	if a, err := netip.ParseAddr(e); err == nil {
+		return a.Unmap().WithZone(""), true
+	}
+	if ap, err := netip.ParseAddrPort(e); err == nil {
+		return ap.Addr().Unmap().WithZone(""), true
+	}
+	if len(e) > 2 && e[0] == '[' && e[len(e)-1] == ']' {
+		if a, err := netip.ParseAddr(e[1 : len(e)-1]); err == nil && a.Is6() {
+			return a.WithZone(""), true
+		}
+	}
+	return netip.Addr{}, false
 }
 
 // remoteAddr is r.RemoteAddr's host, with or without a port, unmapped and
@@ -189,7 +224,10 @@ func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) 
 		// The route is known only now: routing fills it in after OnRequest.
 		kind, _ := collage.RouteOf(ctx)
 		switch {
-		case probePath && !servesPath(kind), early:
+		// A page is the route before its guards and render run, so a
+		// placeholder page answering 404 (/stories/{id}, /{slug}) does not
+		// serve the probe path: only a success does.
+		case probePath && !(servesPath(kind) && status < 400), early:
 			p.strike(c, "probe")
 		case status == http.StatusNotFound && kind != "mount":
 			p.strike(c, "notfound")
