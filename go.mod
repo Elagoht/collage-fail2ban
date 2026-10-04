@@ -6,4 +6,4 @@ module github.com/Elagoht/collage-fail2ban
 
 go 1.26
 
-require github.com/Elagoht/collage v0.46.0
+require github.com/Elagoht/collage v0.47.0
