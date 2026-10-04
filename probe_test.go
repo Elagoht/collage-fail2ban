@@ -22,7 +22,19 @@ func TestIsProbe(t *testing.T) {
 		{"/environment", false},
 		{"/", false},
 		{"/blog/wp-admin", false},
-		{"/.git", false}, // "/.git/" is the prefix
+		{"/.git", true},
+		{"/x/.git", true},
+		{"/api/.env", true},
+		{"/API/.ENV", true},
+		{"/backend/.git/config", true},
+		{"/a/b/.git/HEAD", true},
+		{"/.github", false},
+		{"/blog/.gitignore-tips", false},
+		{"/api/.env.local", true},
+		{"/api/.envoy", true}, // as at the root, a segment starting with ".env"
+		{"/api/x.env", false},
+		{"/x/.gitconfig", false},
+		{"/docs/env", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

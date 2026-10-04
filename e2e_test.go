@@ -67,6 +67,12 @@ type harness struct {
 
 func newApp(t *testing.T, opts Options, dev bool, proxies []string) *harness {
 	t.Helper()
+	return newAppWith(t, opts, dev, proxies, nil)
+}
+
+// newAppWith is newApp, with setup run on the app before its handler is built.
+func newAppWith(t *testing.T, opts Options, dev bool, proxies []string, setup func(*collage.App)) *harness {
+	t.Helper()
 	hs := &harness{
 		t:       t,
 		p:       New(opts),
@@ -94,6 +100,9 @@ func newApp(t *testing.T, opts Options, dev bool, proxies []string) *harness {
 	if err := app.RegisterPage(page); err != nil {
 		t.Fatalf("RegisterPage: %v", err)
 	}
+	if setup != nil {
+		setup(app)
+	}
 	hs.app = app
 	hs.h = app.Handler()
 	return hs
@@ -106,6 +115,16 @@ func (hs *harness) get(target, remote string, xff ...string) *httptest.ResponseR
 	for _, v := range xff {
 		r.Header.Add("X-Forwarded-For", v)
 	}
+	rec := httptest.NewRecorder()
+	hs.h.ServeHTTP(rec, r)
+	return rec
+}
+
+// getDest serves target from remote with a Sec-Fetch-Dest header.
+func (hs *harness) getDest(target, remote, dest string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodGet, target, nil)
+	r.RemoteAddr = remote
+	r.Header.Set("Sec-Fetch-Dest", dest)
 	rec := httptest.NewRecorder()
 	hs.h.ServeHTTP(rec, r)
 	return rec
@@ -515,5 +534,149 @@ func TestE2E_BeforeStart(t *testing.T) {
 	q.Ban(addr, time.Minute)
 	if b := q.Bans(); len(b) != 0 {
 		t.Errorf("unstarted Bans() = %+v, want none", b)
+	}
+}
+
+// A proxy left out of TrustedProxies is RemoteAddr for every visitor: banning
+// it would ban them all. Its requests are not counted, and a Warn says why.
+func TestE2E_ForgottenTrustedProxies(t *testing.T) {
+	hs := newApp(t, Options{}, false, nil)
+	for i := range 10 {
+		if got := hs.get("/.env", "127.0.0.1:1", "9.9.9.9").Code; got == http.StatusForbidden {
+			t.Fatalf("probe %d through an untrusted local proxy: 403, want the proxy never banned", i+1)
+		}
+	}
+	for range 10 {
+		r := req("10.0.0.1:1")
+		r.Header.Set("X-Forwarded-For", "9.9.9.9")
+		hs.p.Report(r, "login")
+	}
+	if b := hs.p.Bans(); len(b) != 0 {
+		t.Errorf("Bans() = %+v, want none", b)
+	}
+	if n := strings.Count(hs.logs.String(), "TrustedProxies is probably missing"); n != 1 {
+		t.Errorf("%d TrustedProxies warnings, want 1; logs:\n%s", n, hs.logs.String())
+	}
+	// A local client without X-Forwarded-For is still counted.
+	hs.probes(3, "127.0.0.2:1")
+	if got := hs.status("127.0.0.2:1"); got != http.StatusForbidden {
+		t.Errorf("local client without X-Forwarded-For: status = %d, want 403", got)
+	}
+
+	trusted := newApp(t, Options{}, false, []string{"127.0.0.1"})
+	for range 3 {
+		trusted.get("/.env", "127.0.0.1:1", "9.9.9.9")
+	}
+	if got := trusted.status("127.0.0.1:1", "9.9.9.9"); got != http.StatusForbidden {
+		t.Errorf("with TrustedProxies: status = %d, want 403", got)
+	}
+	if b := trusted.p.Bans(); len(b) != 1 || b[0].Prefix != netip.MustParsePrefix("9.9.9.9/32") {
+		t.Errorf("Bans() = %+v, want only 9.9.9.9/32", b)
+	}
+	if strings.Contains(trusted.logs.String(), "TrustedProxies is probably missing") {
+		t.Errorf("warned with TrustedProxies set; logs:\n%s", trusted.logs.String())
+	}
+}
+
+// A probe path the site really serves as a page is not a probe; a handler or a
+// mount serving it still is.
+func TestE2E_ProbePathOnARealRoute(t *testing.T) {
+	page := newAppWith(t, Options{}, false, nil, func(app *collage.App) {
+		cgi := collage.NewPage("cgi").WithContent(collage.NewFragment("p", "p.html").Build()).WithPath("en", "/cgi-bin/x").Build()
+		if err := app.RegisterPage(cgi); err != nil {
+			t.Fatalf("RegisterPage: %v", err)
+		}
+	})
+	for i := range 4 {
+		if got := page.get("/cgi-bin/x", "1.1.1.1:1").Code; got != http.StatusOK {
+			t.Fatalf("page at /cgi-bin/x, request %d: status = %d, want 200", i+1, got)
+		}
+	}
+	if b := page.p.Bans(); len(b) != 0 {
+		t.Errorf("page: Bans() = %+v, want none", b)
+	}
+
+	handler := newAppWith(t, Options{}, false, nil, func(app *collage.App) {
+		if err := app.Handle("/cgi-bin/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		})); err != nil {
+			t.Fatalf("Handle: %v", err)
+		}
+	})
+	for range 3 {
+		handler.get("/cgi-bin/x", "1.1.1.1:1")
+	}
+	if got := handler.status("1.1.1.1:1"); got != http.StatusForbidden {
+		t.Errorf("handler at /cgi-bin/: status = %d, want 403", got)
+	}
+}
+
+// A missing file under a mount is a broken link on a page, not a scan.
+func TestE2E_MountNotFoundNotCounted(t *testing.T) {
+	hs := newAppWith(t, Options{}, false, nil, func(app *collage.App) {
+		if err := app.Mount("/static/", fstest.MapFS{"app.css": {Data: []byte("a")}}); err != nil {
+			t.Fatalf("Mount: %v", err)
+		}
+	})
+	for range 60 {
+		if got := hs.get("/static/missing.png", "1.1.1.1:1").Code; got != http.StatusNotFound {
+			t.Fatalf("missing static file: status = %d, want 404", got)
+		}
+	}
+	if got := hs.status("1.1.1.1:1"); got != http.StatusOK {
+		t.Errorf("status = %d, want 200", got)
+	}
+}
+
+// <img src="/.env"> on another page must not ban its readers; a document
+// request is still judged.
+func TestE2E_SubresourceRequestsNotCounted(t *testing.T) {
+	for _, dest := range []string{"image", "script", "style", "font"} {
+		hs := newApp(t, Options{Jails: map[string]Jail{"notfound": {MaxRetry: 1}}}, false, nil)
+		for range 3 {
+			hs.getDest("/.env", "1.1.1.1:1", dest)
+		}
+		hs.getDest("/missing", "1.1.1.1:1", dest)
+		if got := hs.status("1.1.1.1:1"); got != http.StatusOK {
+			t.Errorf("Sec-Fetch-Dest %s: status = %d, want 200", dest, got)
+		}
+	}
+	for _, dest := range []string{"document", "iframe", "empty"} {
+		hs := newApp(t, Options{}, false, nil)
+		for range 3 {
+			hs.getDest("/.env", "1.1.1.1:1", dest)
+		}
+		if got := hs.status("1.1.1.1:1"); got != http.StatusForbidden {
+			t.Errorf("Sec-Fetch-Dest %s: status = %d, want 403", dest, got)
+		}
+	}
+}
+
+// Ban with no length does nothing; a manual ban never shortens a live one.
+func TestE2E_BanLength(t *testing.T) {
+	var calls atomic.Int64
+	hs := newApp(t, Options{OnBan: func(Ban) { calls.Add(1) }}, false, nil)
+	addr := netip.MustParseAddr("1.1.1.1")
+	hs.p.Ban(addr, 0)
+	hs.p.Ban(addr, -time.Hour)
+	if b := hs.p.Bans(); len(b) != 0 {
+		t.Errorf("Bans() after Ban(0) and Ban(-1h) = %+v, want none", b)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("OnBan calls = %d, want 0", n)
+	}
+	if strings.Contains(hs.logs.String(), "fail2ban: banned") {
+		t.Errorf("Ban(0) logged a ban: %s", hs.logs.String())
+	}
+
+	hs.p.Ban(addr, 2*time.Hour)
+	hs.p.Ban(addr, time.Minute)
+	b := hs.p.Bans()
+	if len(b) != 1 || !b[0].Until.Equal(hs.clock.now().Add(2*time.Hour)) {
+		t.Fatalf("Bans() = %+v, want the 2h ban kept", b)
+	}
+	hs.p.Ban(addr, 3*time.Hour)
+	if b := hs.p.Bans(); len(b) != 1 || !b[0].Until.Equal(hs.clock.now().Add(3*time.Hour)) {
+		t.Errorf("Bans() = %+v, want the ban lengthened to 3h", b)
 	}
 }

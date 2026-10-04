@@ -1,7 +1,6 @@
 package fail2ban
 
 import (
-	"container/list"
 	"net/netip"
 	"slices"
 	"sync"
@@ -25,16 +24,59 @@ type store struct {
 	maxBanTime time.Duration // doubling's cap; 0 or less is no cap
 
 	counters map[netip.Prefix]*client
-	lru      *list.List // of netip.Prefix, most recently struck at the front
+	lru      clientList // most recently struck at the front
 	banRecs  map[netip.Prefix]*banRec
 	byEnd    banHeap   // the same records, soonest until first
 	swept    time.Time // last sweep
 }
 
-// client is one client's strikes, by jail.
+// client is one client's strikes, by jail, and its place in store.lru.
 type client struct {
-	strikes map[string]*jailStrikes
-	elem    *list.Element // in store.lru
+	prefix     netip.Prefix
+	strikes    map[string]*jailStrikes
+	prev, next *client // in store.lru; nil at either end
+}
+
+// clientList is a doubly-linked list of clients threaded through their own
+// prev and next fields: the LRU order, written out rather than built on
+// container/list, whose elements carry their value as any.
+type clientList struct {
+	front, back *client
+}
+
+// pushFront puts c, which is in no list, at the front.
+func (l *clientList) pushFront(c *client) {
+	c.prev, c.next = nil, l.front
+	if l.front != nil {
+		l.front.prev = c
+	} else {
+		l.back = c
+	}
+	l.front = c
+}
+
+// remove takes c, which is in l, out.
+func (l *clientList) remove(c *client) {
+	if c.prev != nil {
+		c.prev.next = c.next
+	} else {
+		l.front = c.next
+	}
+	if c.next != nil {
+		c.next.prev = c.prev
+	} else {
+		l.back = c.prev
+	}
+	c.prev, c.next = nil, nil
+}
+
+// moveToFront moves c, which is in l, to the front.
+func (l *clientList) moveToFront(c *client) {
+	if l.front == c {
+		return
+	}
+	l.remove(c)
+	l.pushFront(c)
 }
 
 // jailStrikes is a client's strikes in one jail, oldest first, with the jail's
@@ -135,7 +177,6 @@ func newStore(maxTracked, maxBans int, maxBanTime time.Duration) *store {
 		maxBans:    maxBans,
 		maxBanTime: maxBanTime,
 		counters:   make(map[netip.Prefix]*client),
-		lru:        list.New(),
 		banRecs:    make(map[netip.Prefix]*banRec),
 	}
 }
@@ -184,19 +225,15 @@ func (s *store) strike(c netip.Prefix, jail string, j Jail, now time.Time) (Ban,
 	}
 	cl, ok := s.counters[c]
 	if ok {
-		s.lru.MoveToFront(cl.elem)
+		s.lru.moveToFront(cl)
 	} else {
 		if s.maxTracked > 0 {
-			for len(s.counters) >= s.maxTracked {
-				back := s.lru.Back()
-				if back == nil {
-					break
-				}
-				s.dropClient(back.Value.(netip.Prefix))
+			for len(s.counters) >= s.maxTracked && s.lru.back != nil {
+				s.dropClient(s.lru.back.prefix)
 			}
 		}
-		cl = &client{strikes: make(map[string]*jailStrikes)}
-		cl.elem = s.lru.PushFront(c)
+		cl = &client{prefix: c, strikes: make(map[string]*jailStrikes)}
+		s.lru.pushFront(cl)
 		s.counters[c] = cl
 	}
 	js, ok := cl.strikes[jail]
@@ -238,7 +275,8 @@ func (s *store) forgive(c netip.Prefix, jail string) {
 }
 
 // ban bans c in jail's name. With double, the length is d doubled per recent
-// previous ban and capped; without, it is d. Either way Count is recorded.
+// previous ban and capped; without, it is d, and a live ban ending later keeps
+// its end. Either way Count is recorded.
 func (s *store) ban(c netip.Prefix, jail string, d time.Duration, now time.Time, double bool) Ban {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,6 +326,10 @@ func (s *store) put(c netip.Prefix, jail string, d time.Duration, now time.Time,
 		}
 	}
 	until := now.Add(d)
+	if ok && !double && until.Before(r.until) {
+		// A manual ban never shortens a live one: the later end wins.
+		until = r.until
+	}
 	if ok {
 		r.until, r.jail, r.count = until, jail, count
 		s.byEnd.fix(r)
@@ -323,7 +365,7 @@ func (s *store) dropClient(c netip.Prefix) {
 	if !ok {
 		return
 	}
-	s.lru.Remove(cl.elem)
+	s.lru.remove(cl)
 	delete(s.counters, c)
 }
 

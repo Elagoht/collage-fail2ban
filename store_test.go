@@ -2,6 +2,7 @@ package fail2ban
 
 import (
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,6 +165,25 @@ func TestStore_ManualBan(t *testing.T) {
 	}
 }
 
+// A manual ban over a live one keeps the later end.
+func TestStore_ManualBanNeverShortens(t *testing.T) {
+	s := newStore(100, 100, 24*time.Hour)
+	c := pfx(t, "1.2.3.4")
+	s.ban(c, "manual", 2*time.Hour, t0, false)
+	b := s.ban(c, "manual", time.Minute, t0.Add(time.Minute), false)
+	if want := t0.Add(2 * time.Hour); !b.Until.Equal(want) {
+		t.Fatalf("shorter ban: Until = %v, want %v", b.Until, want)
+	}
+	if got := s.bans(t0.Add(time.Minute)); len(got) != 1 || !got[0].Until.Equal(t0.Add(2*time.Hour)) {
+		t.Fatalf("bans() = %+v, want the 2h end", got)
+	}
+	b = s.ban(c, "manual", 3*time.Hour, t0.Add(time.Minute), false)
+	if want := t0.Add(time.Minute + 3*time.Hour); !b.Until.Equal(want) {
+		t.Fatalf("longer ban: Until = %v, want %v", b.Until, want)
+	}
+	checkHeap(t, s)
+}
+
 func TestStore_Bounds(t *testing.T) {
 	s := newStore(100, 50, 24*time.Hour)
 	j := testJail()
@@ -174,8 +194,8 @@ func TestStore_Bounds(t *testing.T) {
 	for i := range 20000 {
 		s.strike(addr(i), "probe", j, t0.Add(time.Duration(i)*time.Millisecond))
 	}
-	if len(s.counters) > 100 || s.lru.Len() > 100 {
-		t.Fatalf("tracked %d (list %d), want ≤ 100", len(s.counters), s.lru.Len())
+	if len(s.counters) > 100 || lruLen(t, s) > 100 {
+		t.Fatalf("tracked %d (list %d), want ≤ 100", len(s.counters), lruLen(t, s))
 	}
 	// The most recently struck survive.
 	for i := 20000 - 100; i < 20000; i++ {
@@ -277,8 +297,8 @@ func TestStore_Sweep(t *testing.T) {
 	// After FindTime the idle counter goes; the ended ban's record stays for doubling.
 	at := b.Until.Add(time.Minute)
 	s.banned(pfx(t, "9.9.9.9"), at)
-	if len(s.counters) != 0 || s.lru.Len() != 0 {
-		t.Fatalf("idle counter kept: %d (list %d)", len(s.counters), s.lru.Len())
+	if len(s.counters) != 0 || lruLen(t, s) != 0 {
+		t.Fatalf("idle counter kept: %d (list %d)", len(s.counters), lruLen(t, s))
 	}
 	if len(s.banRecs) != 1 {
 		t.Fatal("record dropped before end+24h")
@@ -389,5 +409,65 @@ func TestStore_HeapInStep(t *testing.T) {
 		if len(s.banRecs) > 20 {
 			t.Fatalf("%d records over the cap", len(s.banRecs))
 		}
+	}
+}
+
+// lruLen walks s.lru both ways, checks the links agree with each other and
+// with s.counters, and returns its length.
+func lruLen(t *testing.T, s *store) int {
+	t.Helper()
+	n := 0
+	var prev *client
+	for c := s.lru.front; c != nil; c = c.next {
+		if c.prev != prev {
+			t.Fatalf("lru: %v's prev is not the client before it", c.prefix)
+		}
+		if s.counters[c.prefix] != c {
+			t.Fatalf("lru: %v is not the client s.counters holds", c.prefix)
+		}
+		prev = c
+		n++
+	}
+	if s.lru.back != prev {
+		t.Fatal("lru: back is not the last client")
+	}
+	return n
+}
+
+// The LRU list keeps its links straight through moves and removals at either
+// end and in the middle.
+func TestClientList(t *testing.T) {
+	s := newStore(0, 0, 0)
+	cs := make([]*client, 4)
+	for i := range cs {
+		cs[i] = &client{prefix: netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 1, 1, byte(i)}), 32)}
+		s.counters[cs[i].prefix] = cs[i]
+		s.lru.pushFront(cs[i]) // front: 3 2 1 0
+	}
+	order := func() []int {
+		var out []int
+		for c := s.lru.front; c != nil; c = c.next {
+			out = append(out, int(c.prefix.Addr().As4()[3]))
+		}
+		return out
+	}
+	s.lru.moveToFront(cs[0]) // 0 3 2 1
+	s.lru.moveToFront(cs[2]) // 2 0 3 1
+	s.lru.moveToFront(cs[2]) // unchanged
+	if got, want := order(), []int{2, 0, 3, 1}; !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	s.lru.remove(cs[1]) // back
+	delete(s.counters, cs[1].prefix)
+	s.lru.remove(cs[2]) // front
+	delete(s.counters, cs[2].prefix)
+	s.lru.remove(cs[0]) // only 3 left after this
+	delete(s.counters, cs[0].prefix)
+	if got := lruLen(t, s); got != 1 || s.lru.front != cs[3] || s.lru.back != cs[3] {
+		t.Fatalf("len = %d, front %v, back %v; want only client 3", got, s.lru.front, s.lru.back)
+	}
+	s.lru.remove(cs[3])
+	if s.lru.front != nil || s.lru.back != nil {
+		t.Fatal("emptied list still has an end")
 	}
 }

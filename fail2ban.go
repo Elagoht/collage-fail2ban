@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +41,10 @@ type Plugin struct {
 	// public method and the request hook check it first, so before Init and in
 	// development they do nothing, race-free.
 	started atomic.Bool
+
+	// proxyWarning logs, once, that a local proxy's requests are not counted
+	// because Server.TrustedProxies does not list it.
+	proxyWarning sync.Once
 }
 
 var _ collage.RequestHook = (*Plugin)(nil)
@@ -113,6 +119,38 @@ func (p *Plugin) client(r *http.Request) (netip.Prefix, bool) {
 	return p.clientOf(collage.ClientIP(r))
 }
 
+// counted is the client r comes from, and whether its requests are counted.
+// Beyond client's rules, a request from a loopback or private RemoteAddr that
+// carries X-Forwarded-For but whose ClientIP is still RemoteAddr is not: that
+// is a proxy Server.TrustedProxies forgot, and banning it would ban every
+// visitor behind it. The first such request logs a Warn.
+func (p *Plugin) counted(r *http.Request) (netip.Prefix, bool) {
+	addr := collage.ClientIP(r)
+	if len(r.Header.Values("X-Forwarded-For")) > 0 && (addr.IsLoopback() || addr.IsPrivate()) && addr == remoteAddr(r) {
+		p.proxyWarning.Do(func() {
+			p.log.LogAttrs(r.Context(), slog.LevelWarn,
+				"fail2ban: a request from a local proxy carries X-Forwarded-For, but Server.TrustedProxies is probably missing it; requests through it are not counted, or the proxy, and every visitor with it, would be banned",
+				slog.String("proxy", addr.String()))
+		})
+		return netip.Prefix{}, false
+	}
+	return p.clientOf(addr)
+}
+
+// remoteAddr is r.RemoteAddr's host, with or without a port, unmapped and
+// without its zone; the zero Addr when it holds none.
+func remoteAddr(r *http.Request) netip.Addr {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return a.Unmap().WithZone("")
+}
+
 // clientOf is the client addr belongs to, and whether it is one to count.
 // Allow is matched against the address itself, so an allowed IPv6 address is
 // not taken for its whole /64.
@@ -130,28 +168,45 @@ func (p *Plugin) clientOf(addr netip.Addr) (netip.Prefix, bool) {
 	return c, true
 }
 
-// OnRequest judges the request once it is answered: a probe path or an early
-// rejection strikes the probe jail, else a 404 strikes notfound. The request is
-// classified here, before anything downstream can change it; finish only
-// hears the status.
+// OnRequest judges the request once it is answered: a probe path the site
+// does not serve as a page, a document or an action, or an early rejection,
+// strikes the probe jail; else a 404 not from a mount strikes notfound. A
+// browser's subresource request strikes nothing. The request is classified
+// here, before anything downstream can change it; finish only hears the status
+// and reads the route the request resolved to.
 func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) {
 	ctx := r.Context()
-	if !p.started.Load() {
+	if !p.started.Load() || isSubresource(r) {
 		return ctx, nil
 	}
-	c, ok := p.client(r)
+	c, ok := p.counted(r)
 	if !ok {
 		return ctx, nil
 	}
-	probe := isProbe(r, p.probes) || isEarlyRejection(r)
+	probePath := isProbe(r, p.probes)
+	early := isEarlyRejection(r)
 	return ctx, func(status int) {
+		// The route is known only now: routing fills it in after OnRequest.
+		kind, _ := collage.RouteOf(ctx)
 		switch {
-		case probe:
+		case probePath && !servesPath(kind), early:
 			p.strike(c, "probe")
-		case status == http.StatusNotFound:
+		case status == http.StatusNotFound && kind != "mount":
 			p.strike(c, "notfound")
 		}
 	}
+}
+
+// servesPath reports whether a route of kind is the site's own content at its
+// path — a page, a document or an action — so a probe path resolving to it is
+// one the site really serves. A handler or a mount answers a whole prefix, so a
+// probe under it still counts.
+func servesPath(kind string) bool {
+	switch kind {
+	case "page", "document", "action":
+		return true
+	}
+	return false
 }
 
 // strike counts one strike against c in jail and announces the ban it makes.
@@ -188,7 +243,7 @@ func (p *Plugin) Report(r *http.Request, jail string) {
 	if !p.started.Load() {
 		return
 	}
-	if c, ok := p.client(r); ok {
+	if c, ok := p.counted(r); ok {
 		p.strike(c, jail)
 	}
 }
@@ -203,10 +258,11 @@ func (p *Plugin) Forgive(r *http.Request, jail string) {
 	}
 }
 
-// Ban bans addr's client for d, in jail "manual", without doubling. An address
-// in Allow is never banned.
+// Ban bans addr's client for d, in jail "manual", without doubling. A d of zero
+// or less does nothing, and a live ban ending later keeps its end: Ban never
+// shortens a ban. An address in Allow is never banned.
 func (p *Plugin) Ban(addr netip.Addr, d time.Duration) {
-	if !p.started.Load() {
+	if !p.started.Load() || d <= 0 {
 		return
 	}
 	if c, ok := p.clientOf(addr); ok {

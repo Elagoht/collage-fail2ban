@@ -32,7 +32,10 @@ func probePrefixes(extra []string) []string {
 }
 
 // isProbe reports whether r's path starts, case-insensitively, with one of
-// prefixes. It is a plain prefix match: "/.env" also matches "/.envoy".
+// prefixes — a plain prefix match: "/.env" also matches "/.envoy" — or has,
+// anywhere, a segment starting with ".env" or a segment ".git": scanners look
+// for the files a deploy forgot under every directory, "/api/.env",
+// "/backend/.git/config", and "/.git" itself.
 func isProbe(r *http.Request, prefixes []string) bool {
 	p := strings.ToLower(r.URL.Path)
 	for _, pre := range prefixes {
@@ -40,7 +43,24 @@ func isProbe(r *http.Request, prefixes []string) bool {
 			return true
 		}
 	}
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == ".git" || strings.HasPrefix(seg, ".env") {
+			return true
+		}
+	}
 	return false
+}
+
+// isSubresource reports whether r is a browser fetching a part of a page — an
+// image, a script, a style sheet — by its Sec-Fetch-Dest: anything but a
+// document, a frame or a fetch ("empty"). A page anywhere can make its readers'
+// browsers ask for any path, so these requests never strike.
+func isSubresource(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "", "document", "iframe", "empty":
+		return false
+	}
+	return true
 }
 
 // isEarlyRejection reports whether collage answers r before routing because of
