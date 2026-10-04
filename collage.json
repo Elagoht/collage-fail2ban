@@ -1,0 +1,108 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Elagoht/collage-snippets-highlighter/main/schemas/collage-plugin-manifest.schema.json",
+  "name": "elagoht/fail2ban",
+  "description": "Package fail2ban bans clients that probe or brute-force a site, with the standard library alone.",
+  "repository": "https://github.com/Elagoht/collage-fail2ban",
+  "config": {
+    "type": "object",
+    "description": "Package fail2ban bans clients that probe or brute-force a site, with the standard library alone.",
+    "properties": {
+      "allow": {
+        "type": "array",
+        "description": "addresses and CIDR ranges never counted or banned",
+        "items": {
+          "type": "string"
+        }
+      },
+      "inDevelopment": {
+        "type": "boolean",
+        "description": "default false: nothing happens in development"
+      },
+      "jails": {
+        "type": "object",
+        "description": "overrides and app jails, by name",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "banTime": {
+              "description": "first ban's length",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+                  "examples": [
+                    "30s",
+                    "5m"
+                  ]
+                },
+                {
+                  "type": "integer",
+                  "description": "nanoseconds"
+                }
+              ]
+            },
+            "findTime": {
+              "description": "window strikes are counted in",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+                  "examples": [
+                    "30s",
+                    "5m"
+                  ]
+                },
+                {
+                  "type": "integer",
+                  "description": "nanoseconds"
+                }
+              ]
+            },
+            "maxRetry": {
+              "type": "integer",
+              "description": "strikes that ban"
+            },
+            "off": {
+              "type": "boolean",
+              "description": "the jail counts nothing"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "maxBanTime": {
+        "description": "cap for repeat offenders, default \"24h\"",
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+            "examples": [
+              "30s",
+              "5m"
+            ]
+          },
+          {
+            "type": "integer",
+            "description": "nanoseconds"
+          }
+        ]
+      },
+      "maxBans": {
+        "type": "integer",
+        "description": "live bans, default 10000"
+      },
+      "maxTracked": {
+        "type": "integer",
+        "description": "clients with live counters, default 10000"
+      },
+      "probePaths": {
+        "type": "array",
+        "description": "added to the built-in list",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}
