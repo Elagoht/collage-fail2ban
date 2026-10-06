@@ -711,7 +711,7 @@ func TestE2E_CrossSiteRequestsNotCounted(t *testing.T) {
 func missingPage(t *testing.T, app *collage.App, name, path string) {
 	t.Helper()
 	frag := collage.NewFragment(name, "p.html").
-		WithDataHandler(collage.Load(func(context.Context, *collage.RenderContext) (string, error) {
+		WithData(collage.Load(func(context.Context, *collage.RenderContext) (string, error) {
 			return "", collage.ErrNotFound
 		})).Required().Build()
 	if err := app.RegisterPage(collage.NewPage(name).WithPath("en", path).WithContent(frag).Build()); err != nil {
