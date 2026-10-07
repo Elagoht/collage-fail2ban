@@ -37,7 +37,7 @@ app, err := collage.New(&collage.Config{
 })
 ```
 
-Requires collage v0.47.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
+Requires collage v0.50.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
 and a `RequestHook` that sees the requests collage rejects before routing.
 
 **List it first in `Config.Plugins`**, so its ban check runs before the other

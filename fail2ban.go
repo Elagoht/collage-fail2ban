@@ -23,7 +23,7 @@ import (
 const Name = "elagoht/fail2ban"
 
 // version is the plugin's version.
-const version = "0.1.1"
+const version = "0.1.3"
 
 // Plugin is the fail2ban plugin.
 type Plugin struct {
@@ -62,9 +62,11 @@ func (p *Plugin) Version() string { return version }
 // Configure reads the configuration, checks it, parses Allow and applies the
 // defaults.
 func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
-	if err := host.Config(&p.opts); err != nil {
+	cfg, err := collage.PluginConfig(host, p.opts)
+	if err != nil {
 		return err
 	}
+	p.opts = cfg
 	o := &p.opts
 	if err := o.validate(); err != nil {
 		return err
