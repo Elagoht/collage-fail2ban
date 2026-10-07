@@ -41,8 +41,15 @@ Requires collage v0.52.0 or later, for `Server.TrustedProxies`, `collage.ClientI
 a `RequestHook` that sees the requests collage rejects before routing, and
 `collage.IsCapture`.
 
-**List it first in `Config.Plugins`**, so its ban check runs before the other
-plugins' middleware.
+**List it first in `Config.Plugins`, after `elagoht/health` if you use it**, so its
+ban check runs before the other plugins' middleware. Health goes first because a
+probe must not be refused: the ban check is middleware, and with fail2ban listed
+before health, a banned address, a kubelet's node among them, gets a ban's `403`
+from `/healthz` and the pod is restarted. Listed after health, the probe is
+answered with `ok` before the ban check runs. Counting is not affected by the
+order: it is a `RequestHook`, which runs before any middleware, so a probe is
+counted wherever health is listed, and a probe is no strike: health's paths are
+not probe paths and answer `200`.
 
 ## Behind a proxy: set `Server.TrustedProxies`
 
@@ -276,6 +283,10 @@ has started do nothing either.
   to encoded-slash and dirty-path requests.
 
 ## Changes
+
+### v0.1.6
+
+- Docs only: the README says to list the plugin first, after `elagoht/health` when that is used, so health's probes are not refused by a ban. Nothing else changes.
 
 ### v0.1.5
 
