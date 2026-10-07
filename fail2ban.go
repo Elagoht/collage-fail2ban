@@ -23,7 +23,7 @@ import (
 const Name = "elagoht/fail2ban"
 
 // version is the plugin's version.
-const version = "0.1.3"
+const version = "0.1.4"
 
 // Plugin is the fail2ban plugin.
 type Plugin struct {
