@@ -23,7 +23,7 @@ import (
 const Name = "elagoht/fail2ban"
 
 // version is the plugin's version.
-const version = "0.1.4"
+const version = "0.1.5"
 
 // Plugin is the fail2ban plugin.
 type Plugin struct {
@@ -123,12 +123,18 @@ func (p *Plugin) client(r *http.Request) (netip.Prefix, bool) {
 }
 
 // counted is the client r comes from, and whether its requests are counted.
-// Beyond client's rules, a request from a loopback or private RemoteAddr whose
+// A static build's header capture (collage.IsCapture) is never. Beyond
+// client's rules, a request from a loopback or private RemoteAddr whose
 // X-Forwarded-For names another address last, but whose ClientIP is still
 // RemoteAddr, is not: that is a proxy Server.TrustedProxies forgot, and
 // banning it would ban every visitor behind it. The first such request logs a
 // Warn.
 func (p *Plugin) counted(r *http.Request) (netip.Prefix, bool) {
+	// A static build asking for its own files to capture their headers is not
+	// a client: nothing it asks for strikes, Report included.
+	if collage.IsCapture(r.Context()) {
+		return netip.Prefix{}, false
+	}
 	addr := collage.ClientIP(r)
 	if (addr.IsLoopback() || addr.IsPrivate()) && addr == remoteAddr(r) && forwardsAnother(r, addr) {
 		p.proxyWarning.Do(func() {
@@ -332,10 +338,12 @@ func (p *Plugin) Bans() []Ban {
 }
 
 // middleware answers a banned client with a plain 403 and renders nothing, so
-// a flood of banned requests stays cheap.
+// a flood of banned requests stays cheap. A static build's header capture is
+// never refused: what it is answered with is what the built file is deployed
+// with, whatever address it seems to come from.
 func (p *Plugin) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p.started.Load() {
+		if p.started.Load() && !collage.IsCapture(r.Context()) {
 			if c, ok := p.client(r); ok && p.store.banned(c, p.now()) {
 				h := w.Header()
 				h.Set("Content-Type", "text/plain; charset=utf-8")

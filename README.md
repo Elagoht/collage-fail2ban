@@ -37,8 +37,9 @@ app, err := collage.New(&collage.Config{
 })
 ```
 
-Requires collage v0.50.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
-and a `RequestHook` that sees the requests collage rejects before routing.
+Requires collage v0.52.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
+a `RequestHook` that sees the requests collage rejects before routing, and
+`collage.IsCapture`.
 
 **List it first in `Config.Plugins`**, so its ban check runs before the other
 plugins' middleware.
@@ -273,3 +274,9 @@ has started do nothing either.
   strikes, it does not smooth load.
 - The `403` is plain by design, and a banned client still gets collage's own answer
   to encoded-slash and dirty-path requests.
+
+## Changes
+
+### v0.1.5
+
+- Requires collage v0.52.0. A static build's header capture (`collage.IsCapture`) is not a client: it never strikes, `Report` included, and is never refused with a ban's `403`, so a mount under a probe path no longer gets the build's own address banned and the rest of the build answered `403`.
