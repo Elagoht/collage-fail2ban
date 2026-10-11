@@ -37,7 +37,7 @@ app, err := collage.New(&collage.Config{
 })
 ```
 
-Requires collage v0.52.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
+Requires collage v0.58.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
 a `RequestHook` that sees the requests collage rejects before routing, and
 `collage.IsCapture`.
 
@@ -283,6 +283,12 @@ has started do nothing either.
   to encoded-slash and dirty-path requests.
 
 ## Changes
+
+### v0.1.7
+
+- collage.json has `order` −25, so `collage plugin add` lists it right after
+  `elagoht/health`.
+- Requires collage v0.58.0.
 
 ### v0.1.6
 

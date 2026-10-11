@@ -3,6 +3,7 @@
   "name": "elagoht/fail2ban",
   "description": "Package fail2ban bans clients that probe or brute-force a site, with the standard library alone.",
   "repository": "https://github.com/Elagoht/collage-fail2ban",
+  "order": -25,
   "config": {
     "type": "object",
     "description": "Package fail2ban bans clients that probe or brute-force a site, with the standard library alone.",
