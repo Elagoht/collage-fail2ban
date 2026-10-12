@@ -23,7 +23,7 @@ import (
 const Name = "elagoht/fail2ban"
 
 // version is the plugin's version.
-const version = "0.1.7"
+const version = "0.1.8"
 
 // Plugin is the fail2ban plugin.
 type Plugin struct {
@@ -230,7 +230,7 @@ func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) 
 	early := isEarlyRejection(r)
 	return ctx, func(status int) {
 		// The route is known only now: routing fills it in after OnRequest.
-		kind, _ := collage.RouteOf(ctx)
+		kind := collage.RouteInfo(ctx).Kind
 		switch {
 		// A page is the route before its guards and render run, so a
 		// placeholder page answering 404 (/stories/{id}, /{slug}) does not

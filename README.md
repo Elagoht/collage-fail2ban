@@ -284,6 +284,10 @@ has started do nothing either.
 
 ## Changes
 
+### v0.1.8
+
+- Rebuilt against collage v0.60.0 (`RouteInfo` replaces `RouteOf`). Requires collage v0.60.0.
+
 ### v0.1.7
 
 - collage.json has `order` −25, so `collage plugin add` lists it right after
