@@ -15,6 +15,7 @@ import (
 
 	fail2ban "github.com/Elagoht/collage-fail2ban"
 	"github.com/Elagoht/collage/pkg/collage"
+	"github.com/Elagoht/collage/pkg/collagetest"
 )
 
 // buildReader reads a finished build, as elagoht/deploy does; with one
@@ -70,36 +71,30 @@ func buildSite(t *testing.T, banFirst bool) (*fail2ban.Plugin, *buildReader, *lo
 	})
 	reader := &buildReader{}
 	logs := &lockedBuf{}
-	app, err := collage.New(&collage.Config{
-		Logger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Server: collage.ServerConfig{Host: "localhost", Port: 3000},
-		Template: collage.TemplateConfig{
-			FS:   fstest.MapFS{"t/p.html": {Data: []byte(`<main>home{{ban}}</main>`)}},
-			Root: "t",
-			Funcs: template.FuncMap{"ban": func() string {
+	page := collage.NewPage("home").WithContent(collage.NewFragment("home", "p.html").Build()).WithPath("en", "/").Build()
+	site := collagetest.NewSite(t,
+		collagetest.WithPlugins(f2b, reader),
+		collagetest.WithTemplates(map[string]string{"p.html": `<main>home{{ban}}</main>`}),
+		collagetest.WithConfig(func(c *collage.Config) {
+			c.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			c.Template.Funcs = template.FuncMap{"ban": func() string {
 				if banFirst {
 					f2b.Ban(captureAddr, time.Hour)
 				}
 				return ""
-			}},
-		},
-		Plugins: []collage.Plugin{f2b, reader},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	page := collage.NewPage("home").WithContent(collage.NewFragment("home", "p.html").Build()).WithPath("en", "/").Build()
-	if err := app.RegisterPage(page); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.Mount("/static/", fstest.MapFS{
-		"a.css": {Data: []byte("a{}")},
-		"b.css": {Data: []byte("b{}")},
-		"c.css": {Data: []byte("c{}")},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	report, err := collage.Build(context.Background(), app, collage.BuildOptions{OutDir: t.TempDir()})
+			}}
+		}),
+		collagetest.WithoutHome(),
+		collagetest.WithRegister(page),
+		collagetest.WithSetup(func(app *collage.App) error {
+			return app.Mount("/static/", fstest.MapFS{
+				"a.css": {Data: []byte("a{}")},
+				"b.css": {Data: []byte("b{}")},
+				"c.css": {Data: []byte("c{}")},
+			})
+		}),
+	)
+	report, err := collage.Build(context.Background(), site.App, collage.BuildOptions{OutDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Elagoht/collage/pkg/collage"
+	"github.com/Elagoht/collage/pkg/collagetest"
 )
 
 // fakeClock is the plugin's clock in these tests.
@@ -71,7 +72,7 @@ func newApp(t *testing.T, opts Options, dev bool, proxies []string) *harness {
 	return newAppWith(t, opts, dev, proxies, nil)
 }
 
-// newAppWith is newApp, with setup run on the app before its handler is built.
+// newAppWith is newApp, with setup run on the app before it starts.
 func newAppWith(t *testing.T, opts Options, dev bool, proxies []string, setup func(*collage.App)) *harness {
 	t.Helper()
 	hs := &harness{
@@ -83,29 +84,27 @@ func newAppWith(t *testing.T, opts Options, dev bool, proxies []string, setup fu
 	}
 	hs.p.now = hs.clock.now
 	renders := hs.renders
-	app, err := collage.New(&collage.Config{
-		DevMode: dev,
-		Logger:  slog.New(slog.NewTextHandler(hs.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Server:  collage.ServerConfig{Host: "localhost", Port: 3000, TrustedProxies: proxies},
-		Template: collage.TemplateConfig{
-			FS:    fstest.MapFS{"t/p.html": {Data: []byte(`<p>hi{{count}}</p>`)}},
-			Root:  "t",
-			Funcs: template.FuncMap{"count": func() string { renders.Add(1); return "" }},
-		},
-		Plugins: []collage.Plugin{hs.p},
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
 	page := collage.NewPage("home").WithContent(collage.NewFragment("p", "p.html").Build()).WithPath("en", "/").Build()
-	if err := app.RegisterPage(page); err != nil {
-		t.Fatalf("RegisterPage: %v", err)
+	options := []collagetest.SiteOption{
+		collagetest.WithPlugins(hs.p),
+		collagetest.WithTemplates(map[string]string{"p.html": `<p>hi{{count}}</p>`}),
+		collagetest.WithConfig(func(c *collage.Config) {
+			c.DevMode = dev
+			c.Logger = slog.New(slog.NewTextHandler(hs.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			c.Server.TrustedProxies = proxies
+			c.Template.Funcs = template.FuncMap{"count": func() string { renders.Add(1); return "" }}
+		}),
+		collagetest.WithoutHome(),
+		collagetest.WithRegister(page),
 	}
 	if setup != nil {
-		setup(app)
+		options = append(options, collagetest.WithSetup(func(app *collage.App) error {
+			setup(app)
+			return nil
+		}))
 	}
-	hs.app = app
-	hs.h = app.Handler()
+	hs.app = collagetest.NewSite(t, options...).App
+	hs.h = hs.app.Handler()
 	return hs
 }
 
