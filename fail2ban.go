@@ -150,6 +150,11 @@ func (p *Plugin) counted(r *http.Request) (netip.Prefix, bool) {
 // forwardsAnother reports whether r's X-Forwarded-For ends with an address
 // other than remote: a proxy naming a client. One naming only itself, or
 // ending in something that is not an address, is not.
+//
+// It is a misconfiguration heuristic for the TrustedProxies warning (and for
+// not banning a forgotten proxy), never client identity: the client is always
+// collage.ClientIP, which believes X-Forwarded-For only from
+// Server.TrustedProxies.
 func forwardsAnother(r *http.Request, remote netip.Addr) bool {
 	values := r.Header.Values("X-Forwarded-For")
 	if len(values) == 0 {
@@ -165,6 +170,8 @@ func forwardsAnother(r *http.Request, remote netip.Addr) bool {
 
 // parseForwarded reads an X-Forwarded-For entry as collage does: an address,
 // with or without a port, an IPv6 one in brackets or not; unmapped, no zone.
+// Only forwardsAnother's misconfiguration heuristic uses it; it never decides
+// who the client is.
 func parseForwarded(e string) (netip.Addr, bool) {
 	if a, err := netip.ParseAddr(e); err == nil {
 		return a.Unmap().WithZone(""), true
