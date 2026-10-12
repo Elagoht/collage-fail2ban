@@ -220,7 +220,7 @@ func (s *store) strike(c netip.Prefix, jail string, j Jail, now time.Time) (Ban,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
-	if j.Off || s.live(c, now) {
+	if j.Disabled || s.live(c, now) {
 		return Ban{}, false
 	}
 	cl, ok := s.counters[c]

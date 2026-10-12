@@ -61,7 +61,7 @@ func buildSite(t *testing.T, banFirst bool) (*fail2ban.Plugin, *buildReader, *lo
 	onBan := 0
 	f2b := fail2ban.New(fail2ban.Options{
 		ProbePaths: []string{"/static/"},
-		Jails:      map[string]fail2ban.Jail{"probe": {MaxRetry: 1, FindTime: fail2ban.Duration(time.Hour), BanTime: fail2ban.Duration(time.Hour)}},
+		Jails:      map[string]fail2ban.Jail{"probe": {MaxRetry: 1, FindTime: collage.Duration(time.Hour), BanTime: collage.Duration(time.Hour)}},
 		OnBan: func(fail2ban.Ban) {
 			mu.Lock()
 			defer mu.Unlock()

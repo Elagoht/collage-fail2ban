@@ -7,12 +7,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Elagoht/collage/pkg/collage"
 )
 
 var t0 = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 func testJail() Jail {
-	return Jail{MaxRetry: 3, FindTime: Duration(10 * time.Minute), BanTime: Duration(time.Hour)}
+	return Jail{MaxRetry: 3, FindTime: collage.Duration(10 * time.Minute), BanTime: collage.Duration(time.Hour)}
 }
 
 func pfx(t *testing.T, s string) netip.Prefix {
@@ -363,7 +365,7 @@ func TestStore_FindTimeChanges(t *testing.T) {
 	c := pfx(t, "1.2.3.4")
 	wide := testJail()
 	narrow := wide
-	narrow.FindTime = Duration(time.Minute)
+	narrow.FindTime = collage.Duration(time.Minute)
 	s.strike(c, "probe", wide, t0)
 	s.strike(c, "probe", narrow, t0.Add(2*time.Minute))
 	if n := len(s.counters[c].strikes["probe"].times); n != 1 {

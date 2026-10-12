@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Elagoht/collage/pkg/collage"
+	"github.com/Elagoht/collage/pkg/collagetest"
 )
 
 // build runs collage.New with the plugin, and the plugin's JSON section when
@@ -37,15 +38,15 @@ func TestJail_Defaults(t *testing.T) {
 		jail string
 		want Jail
 	}{
-		{"probe", Options{}, "probe", Jail{3, Duration(10 * time.Minute), Duration(time.Hour), false}},
-		{"notfound", Options{}, "notfound", Jail{50, Duration(time.Minute), Duration(10 * time.Minute), false}},
-		{"app jail", Options{}, "login", Jail{5, Duration(10 * time.Minute), Duration(15 * time.Minute), false}},
-		{"override one field", Options{Jails: map[string]Jail{"probe": {BanTime: Duration(6 * time.Hour)}}}, "probe",
-			Jail{3, Duration(10 * time.Minute), Duration(6 * time.Hour), false}},
-		{"off", Options{Jails: map[string]Jail{"notfound": {Off: true}}}, "notfound",
-			Jail{50, Duration(time.Minute), Duration(10 * time.Minute), true}},
+		{"probe", Options{}, "probe", Jail{3, collage.Duration(10 * time.Minute), collage.Duration(time.Hour), false}},
+		{"notfound", Options{}, "notfound", Jail{50, collage.Duration(time.Minute), collage.Duration(10 * time.Minute), false}},
+		{"app jail", Options{}, "login", Jail{5, collage.Duration(10 * time.Minute), collage.Duration(15 * time.Minute), false}},
+		{"override one field", Options{Jails: map[string]Jail{"probe": {BanTime: collage.Duration(6 * time.Hour)}}}, "probe",
+			Jail{3, collage.Duration(10 * time.Minute), collage.Duration(6 * time.Hour), false}},
+		{"off", Options{Jails: map[string]Jail{"notfound": {Disabled: true}}}, "notfound",
+			Jail{50, collage.Duration(time.Minute), collage.Duration(10 * time.Minute), true}},
 		{"app jail override", Options{Jails: map[string]Jail{"login": {MaxRetry: 2}}}, "login",
-			Jail{2, Duration(10 * time.Minute), Duration(15 * time.Minute), false}},
+			Jail{2, collage.Duration(10 * time.Minute), collage.Duration(15 * time.Minute), false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,10 +63,10 @@ func TestConfigure_JSON(t *testing.T) {
 	if err := build(t, p, false, raw); err != nil {
 		t.Fatal(err)
 	}
-	if got := p.opts.jail("probe").BanTime; got != Duration(6*time.Hour) {
+	if got := p.opts.jail("probe").BanTime; got != collage.Duration(6*time.Hour) {
 		t.Errorf("probe banTime = %v", time.Duration(got))
 	}
-	if p.opts.MaxBanTime != Duration(48*time.Hour) {
+	if p.opts.MaxBanTime != collage.Duration(48*time.Hour) {
 		t.Errorf("maxBanTime = %v", time.Duration(p.opts.MaxBanTime))
 	}
 	want := []netip.Prefix{
@@ -83,13 +84,40 @@ func TestConfigure_JSON(t *testing.T) {
 	}
 }
 
-func TestConfigure_NanosecondDuration(t *testing.T) {
-	p := New(Options{})
-	if err := build(t, p, false, `{"maxBanTime":3600000000000}`); err != nil {
-		t.Fatal(err)
+// A bare number is no longer read as nanoseconds: "banTime": 3600 used to ban
+// for 3.6µs with no error. It now stops the app, naming the key.
+func TestConfigure_NumberDurationRefused(t *testing.T) {
+	for _, raw := range []string{
+		`{"jails":{"probe":{"banTime":3600}}}`,
+		`{"jails":{"probe":{"findTime":600}}}`,
+		`{"maxBanTime":3600000000000}`,
+	} {
+		_, err := collagetest.TrySite(t,
+			collagetest.WithPlugins(New(Options{})),
+			collagetest.WithPluginConfig(Name, raw),
+		)
+		if err == nil || !strings.Contains(err.Error(), "as a string") {
+			t.Errorf("%s: err = %v, want a duration-as-string error", raw, err)
+		}
 	}
-	if p.opts.MaxBanTime != Duration(time.Hour) {
-		t.Errorf("maxBanTime = %v", time.Duration(p.opts.MaxBanTime))
+}
+
+// The jail key "off" became "disabled"; the old key now fails at start.
+func TestConfigure_OffKeyRemoved(t *testing.T) {
+	_, err := collagetest.TrySite(t,
+		collagetest.WithPlugins(New(Options{})),
+		collagetest.WithPluginConfig(Name, `{"jails":{"probe":{"off":true}}}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "off"`) {
+		t.Errorf("err = %v, want unknown key \"off\"", err)
+	}
+	p := New(Options{})
+	collagetest.NewSite(t,
+		collagetest.WithPlugins(p),
+		collagetest.WithPluginConfig(Name, `{"jails":{"probe":{"disabled":true}}}`),
+	)
+	if !p.opts.jail("probe").Disabled {
+		t.Error(`"disabled": true did not disable the probe jail`)
 	}
 }
 
@@ -128,7 +156,7 @@ func TestConfigure_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := p.opts
-	if o.MaxBanTime != Duration(24*time.Hour) || o.MaxTracked != 10000 || o.MaxBans != 10000 {
+	if o.MaxBanTime != collage.Duration(24*time.Hour) || o.MaxTracked != 10000 || o.MaxBans != 10000 {
 		t.Errorf("defaults = %v / %d / %d", time.Duration(o.MaxBanTime), o.MaxTracked, o.MaxBans)
 	}
 	if p.disabled {

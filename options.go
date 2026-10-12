@@ -1,57 +1,35 @@
 package fail2ban
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Elagoht/collage/pkg/collage"
 )
-
-// Duration is a time.Duration that reads from configuration as Go writes one,
-// "10m", as well as a number of nanoseconds.
-type Duration time.Duration
-
-// UnmarshalJSON reads "10m" or a number of nanoseconds.
-func (d *Duration) UnmarshalJSON(b []byte) error {
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		v, err := time.ParseDuration(s)
-		if err != nil {
-			return fmt.Errorf("fail2ban: %w", err)
-		}
-		*d = Duration(v)
-		return nil
-	}
-	var n int64
-	if err := json.Unmarshal(b, &n); err != nil {
-		return errors.New("fail2ban: a duration is a string like \"10m\" or a number of nanoseconds")
-	}
-	*d = Duration(n)
-	return nil
-}
 
 // Options configures the plugin.
 type Options struct {
-	Jails         map[string]Jail `json:"jails"`         // overrides and app jails, by name
-	ProbePaths    []string        `json:"probePaths"`    // added to the built-in list
-	Allow         []string        `json:"allow"`         // addresses and CIDR ranges never counted or banned
-	MaxBanTime    Duration        `json:"maxBanTime"`    // cap for repeat offenders, default "24h"
-	MaxTracked    int             `json:"maxTracked"`    // clients with live counters, default 10000
-	MaxBans       int             `json:"maxBans"`       // live bans, default 10000
-	InDevelopment bool            `json:"inDevelopment"` // default false: nothing happens in development
+	Jails         map[string]Jail  `json:"jails"`         // overrides and app jails, by name
+	ProbePaths    []string         `json:"probePaths"`    // added to the built-in list
+	Allow         []string         `json:"allow"`         // addresses and CIDR ranges never counted or banned
+	MaxBanTime    collage.Duration `json:"maxBanTime"`    // cap for repeat offenders, default "24h"
+	MaxTracked    int              `json:"maxTracked"`    // clients with live counters, default 10000
+	MaxBans       int              `json:"maxBans"`       // live bans, default 10000
+	InDevelopment bool             `json:"inDevelopment"` // default false: nothing happens in development
 
 	OnBan func(b Ban) `json:"-"`
 }
 
 // Jail is the settings of one jail.
 type Jail struct {
-	MaxRetry int      `json:"maxRetry"` // strikes that ban
-	FindTime Duration `json:"findTime"` // window strikes are counted in
-	BanTime  Duration `json:"banTime"`  // first ban's length
-	Off      bool     `json:"off"`      // the jail counts nothing
+	MaxRetry int              `json:"maxRetry"` // strikes that ban
+	FindTime collage.Duration `json:"findTime"` // window strikes are counted in
+	BanTime  collage.Duration `json:"banTime"`  // first ban's length
+	Disabled bool             `json:"disabled"` // the jail counts nothing
 }
 
 // Ban is a client banned by a jail.
@@ -69,16 +47,16 @@ const (
 )
 
 // defaultJail is what a jail without built-in settings starts from.
-var defaultJail = Jail{MaxRetry: 5, FindTime: Duration(10 * time.Minute), BanTime: Duration(15 * time.Minute)}
+var defaultJail = Jail{MaxRetry: 5, FindTime: collage.Duration(10 * time.Minute), BanTime: collage.Duration(15 * time.Minute)}
 
 // builtinJails are the jails the plugin ships.
 var builtinJails = map[string]Jail{
-	"probe":    {MaxRetry: 3, FindTime: Duration(10 * time.Minute), BanTime: Duration(time.Hour)},
-	"notfound": {MaxRetry: 50, FindTime: Duration(time.Minute), BanTime: Duration(10 * time.Minute)},
+	"probe":    {MaxRetry: 3, FindTime: collage.Duration(10 * time.Minute), BanTime: collage.Duration(time.Hour)},
+	"notfound": {MaxRetry: 50, FindTime: collage.Duration(time.Minute), BanTime: collage.Duration(10 * time.Minute)},
 }
 
 // jail resolves name to its effective settings: the built-in defaults (or 5 /
-// 10m / 15m), each non-zero field of o.Jails[name] overriding, and Off copied.
+// 10m / 15m), each non-zero field of o.Jails[name] overriding, and Disabled copied.
 func (o Options) jail(name string) Jail {
 	j, ok := builtinJails[name]
 	if !ok {
@@ -94,7 +72,7 @@ func (o Options) jail(name string) Jail {
 		if c.BanTime != 0 {
 			j.BanTime = c.BanTime
 		}
-		j.Off = c.Off
+		j.Disabled = c.Disabled
 	}
 	return j
 }

@@ -210,7 +210,7 @@ func TestE2E_DoubleSlashIsNotAProbe(t *testing.T) {
 	}
 }
 
-// A probe that is also a 404 strikes probe only; an Off probe jail strikes
+// A probe that is also a 404 strikes probe only; a Disabled probe jail strikes
 // nothing at all.
 func TestE2E_ProbeBeatsNotFound(t *testing.T) {
 	t.Run("probe only", func(t *testing.T) {
@@ -222,7 +222,7 @@ func TestE2E_ProbeBeatsNotFound(t *testing.T) {
 		}
 	})
 	t.Run("probe off", func(t *testing.T) {
-		hs := newApp(t, Options{Jails: map[string]Jail{"probe": {Off: true}, "notfound": {MaxRetry: 1}}}, false, nil)
+		hs := newApp(t, Options{Jails: map[string]Jail{"probe": {Disabled: true}, "notfound": {MaxRetry: 1}}}, false, nil)
 		hs.probes(5, "1.1.1.1:1")
 		if got := hs.status("1.1.1.1:1"); got != http.StatusOK {
 			t.Errorf("status = %d, want 200", got)
@@ -247,7 +247,7 @@ func TestE2E_NotFound(t *testing.T) {
 		t.Errorf("Bans() = %+v, want one notfound ban", b)
 	}
 
-	off := newApp(t, Options{Jails: map[string]Jail{"notfound": {Off: true}}}, false, nil)
+	off := newApp(t, Options{Jails: map[string]Jail{"notfound": {Disabled: true}}}, false, nil)
 	for range 60 {
 		off.get("/missing", "1.1.1.1:1")
 	}

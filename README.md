@@ -13,7 +13,7 @@ go get github.com/Elagoht/collage-fail2ban
   "elagoht/fail2ban": {
     "jails": {
       "probe": { "banTime": "6h" },
-      "notfound": { "off": true }
+      "notfound": { "disabled": true }
     },
     "allow": ["203.0.113.7", "10.0.0.0/8"]
   }
@@ -37,9 +37,9 @@ app, err := collage.New(&collage.Config{
 })
 ```
 
-Requires collage v0.58.0 or later, for `Server.TrustedProxies`, `collage.ClientIP`,
-a `RequestHook` that sees the requests collage rejects before routing, and
-`collage.IsCapture`.
+Requires collage v0.61.0 or later, for `collage.Duration`, strict plugin keys,
+`Server.TrustedProxies`, `collage.ClientIP`, a `RequestHook` that sees the requests
+collage rejects before routing, and `collage.IsCapture`.
 
 **List it first in `Config.Plugins`, after `elagoht/health` if you use it**, so its
 ban check runs before the other plugins' middleware. Health goes first because a
@@ -87,7 +87,7 @@ for `banTime`.
 | `notfound` | 50 | `1m` | `10m` | any other request answered `404`, except by a mount |
 | any other name | 5 | `10m` | `15m` | only your own `Report` calls |
 
-Override a jail by name. A field left out or zero keeps the default, and `"off": true`
+Override a jail by name. A field left out or zero keeps the default, and `"disabled": true`
 turns the jail off:
 
 ```json
@@ -95,14 +95,15 @@ turns the jail off:
   "elagoht/fail2ban": {
     "jails": {
       "probe": { "banTime": "6h" },
-      "notfound": { "off": true },
+      "notfound": { "disabled": true },
       "login": { "maxRetry": 3 }
     }
   }
 }
 ```
 
-A duration is a Go duration string (`"10m"`) or a number of nanoseconds.
+A duration is a Go duration string (`"10m"`, `"1h30m"`). A bare number is an error
+that names the key: `"banTime": 3600` used to mean 3.6µs.
 
 ### Probe detection
 
@@ -227,7 +228,7 @@ message `fail2ban: banned` with attributes `client`, `jail` and `until`. `OnBan`
 | `InDevelopment` | `inDevelopment` | `false` | Without it nothing happens in dev mode |
 | `OnBan` | not configurable | | `func(b Ban)`. Go only |
 
-A jail takes `maxRetry`, `findTime`, `banTime` and `off`. A negative number
+A jail takes `maxRetry`, `findTime`, `banTime` and `disabled`. A negative number
 fails startup.
 
 ## Development
@@ -283,6 +284,17 @@ has started do nothing either.
   to encoded-slash and dirty-path requests.
 
 ## Changes
+
+### Changed in v0.2.0
+
+| Was | Now |
+| --- | --- |
+| jail key `"off"` / `Jail.Off` | `"disabled"` / `Jail.Disabled` |
+| `fail2ban.Duration` | `collage.Duration` (the type of `MaxBanTime`, `Jail.FindTime`, `Jail.BanTime`) |
+| a duration as a number of nanoseconds (`"banTime": 3600`) | a string only (`"banTime": "1h"`); a number fails startup naming the key |
+
+An old key (`"off"`) now stops the app at start with `unknown key "off"`.
+Requires collage v0.61.0. Route kinds are compared through `collage.RouteKind*`.
 
 ### v0.1.8
 

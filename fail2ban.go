@@ -23,7 +23,7 @@ import (
 const Name = "elagoht/fail2ban"
 
 // version is the plugin's version.
-const version = "0.1.8"
+const version = "0.2.0"
 
 // Plugin is the fail2ban plugin.
 type Plugin struct {
@@ -79,7 +79,7 @@ func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
 	p.probes = probePrefixes(o.ProbePaths)
 	p.disabled = host.DevMode() && !o.InDevelopment
 	if o.MaxBanTime == 0 {
-		o.MaxBanTime = Duration(defaultMaxBanTime)
+		o.MaxBanTime = collage.Duration(defaultMaxBanTime)
 	}
 	if o.MaxTracked == 0 {
 		o.MaxTracked = defaultMaxTracked
@@ -237,7 +237,7 @@ func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) 
 		// serve the probe path: only a success does.
 		case probePath && !(servesPath(kind) && status < 400), early:
 			p.strike(c, "probe")
-		case status == http.StatusNotFound && kind != "mount":
+		case status == http.StatusNotFound && kind != collage.RouteKindMount:
 			p.strike(c, "notfound")
 		}
 	}
@@ -249,7 +249,7 @@ func (p *Plugin) OnRequest(r *http.Request) (context.Context, func(status int)) 
 // probe under it still counts.
 func servesPath(kind string) bool {
 	switch kind {
-	case "page", "document", "action":
+	case collage.RouteKindPage, collage.RouteKindDocument, collage.RouteKindAction:
 		return true
 	}
 	return false

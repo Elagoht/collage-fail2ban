@@ -26,66 +26,42 @@
           "type": "object",
           "properties": {
             "banTime": {
+              "type": "string",
               "description": "first ban's length",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
-                  "examples": [
-                    "30s",
-                    "5m"
-                  ]
-                },
-                {
-                  "type": "integer",
-                  "description": "nanoseconds"
-                }
+              "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+              "examples": [
+                "30s",
+                "5m"
               ]
             },
+            "disabled": {
+              "type": "boolean",
+              "description": "the jail counts nothing"
+            },
             "findTime": {
+              "type": "string",
               "description": "window strikes are counted in",
-              "anyOf": [
-                {
-                  "type": "string",
-                  "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
-                  "examples": [
-                    "30s",
-                    "5m"
-                  ]
-                },
-                {
-                  "type": "integer",
-                  "description": "nanoseconds"
-                }
+              "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+              "examples": [
+                "30s",
+                "5m"
               ]
             },
             "maxRetry": {
               "type": "integer",
               "description": "strikes that ban"
-            },
-            "off": {
-              "type": "boolean",
-              "description": "the jail counts nothing"
             }
           },
           "additionalProperties": false
         }
       },
       "maxBanTime": {
+        "type": "string",
         "description": "cap for repeat offenders, default \"24h\"",
-        "anyOf": [
-          {
-            "type": "string",
-            "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
-            "examples": [
-              "30s",
-              "5m"
-            ]
-          },
-          {
-            "type": "integer",
-            "description": "nanoseconds"
-          }
+        "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+        "examples": [
+          "30s",
+          "5m"
         ]
       },
       "maxBans": {
